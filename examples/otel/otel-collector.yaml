@@ -29,6 +29,10 @@ data:
       loki:
         endpoint: http://loki:3100/loki/api/v1/push
 
+      # export metrics to Prometheus via remote write
+      prometheusremotewrite:
+        endpoint: http://prometheus:9090/api/v1/write
+
       # debug logging
       debug:
         verbosity: detailed
@@ -43,6 +47,10 @@ data:
           receivers: [otlp]
           processors: [batch]
           exporters: [loki, debug]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheusremotewrite, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment

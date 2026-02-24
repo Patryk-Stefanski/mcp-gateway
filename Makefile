@@ -601,8 +601,8 @@ ISTIO_TRACING ?= 0
 AUTH_TRACING ?= 0
 
 .PHONY: otel
-otel: ## Deploy OpenTelemetry observability stack. Use ISTIO_TRACING=1, AUTH_TRACING=1.
-	kubectl apply -f examples/otel/namespace.yaml -f examples/otel/tempo.yaml -f examples/otel/loki.yaml -f examples/otel/otel-collector.yaml -f examples/otel/grafana.yaml
+otel: ## Deploy OpenTelemetry observability stack. Use ISTIO_TRACING=1, ISTIO_METRICS=1, AUTH_TRACING=1.
+	kubectl apply -f examples/otel/namespace.yaml -f examples/otel/tempo.yaml -f examples/otel/loki.yaml -f examples/otel/prometheus.yaml -f examples/otel/otel-collector.yaml -f examples/otel/grafana.yaml
 	@kubectl wait --for=condition=Available deployment -n observability --all --timeout=120s
 ifeq ($(ISTIO_TRACING),1)
 	kubectl apply -f examples/otel/istio-telemetry.yaml
@@ -638,15 +638,17 @@ otel-delete: ## Delete OpenTelemetry observability stack
 	-kubectl delete -f examples/otel/istio-telemetry.yaml --ignore-not-found
 	-kubectl patch istio default --type='merge' \
 		-p='{"spec":{"values":{"meshConfig":{"enableTracing":false,"defaultConfig":{"tracing":null},"extensionProviders":null}}}}'
-	-kubectl delete -f examples/otel/grafana.yaml -f examples/otel/otel-collector.yaml -f examples/otel/loki.yaml -f examples/otel/tempo.yaml -f examples/otel/namespace.yaml --ignore-not-found
+	-kubectl delete -f examples/otel/grafana.yaml -f examples/otel/otel-collector.yaml -f examples/otel/prometheus.yaml -f examples/otel/loki.yaml -f examples/otel/tempo.yaml -f examples/otel/namespace.yaml --ignore-not-found
 
 .PHONY: otel-status
 otel-status: ## Show status of OpenTelemetry observability stack
 	@kubectl get pods -n observability 2>/dev/null || echo "Namespace 'observability' not found. Run 'make otel' to deploy."
 
 .PHONY: otel-forward
-otel-forward: ## Port-forward Grafana (3000)
-	@echo "Grafana: http://localhost:3000"
+otel-forward: ## Port-forward Grafana (3000), Prometheus (9090)
+	@echo "Grafana:    http://localhost:3000"
+	@echo "Prometheus: http://localhost:9090"
+	@kubectl port-forward -n observability svc/prometheus 9090:9090 &
 	@kubectl port-forward -n observability svc/grafana 3000:3000
 
 ##@ Testing

@@ -368,3 +368,8 @@ ldflags
 tracetest
 Syncer
 spancheck
+otlpmetric
+otlpmetricgrpc
+otlpmetrichttp
+sdkmetric
+prometheusremotewrite

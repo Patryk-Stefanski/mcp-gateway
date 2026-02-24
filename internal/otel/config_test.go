@@ -150,6 +150,98 @@ func TestLogsEndpoint(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	tests := []struct {
+		name         string
+		envVars      map[string]string
+		wantEndpoint string
+	}{
+		{
+			name:         "returns empty when nothing set",
+			envVars:      map[string]string{},
+			wantEndpoint: "",
+		},
+		{
+			name: "returns base endpoint when only base set",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+			},
+			wantEndpoint: "http://collector:4318",
+		},
+		{
+			name: "signal-specific overrides base",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_ENDPOINT":         "http://collector:4318",
+				"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://prometheus:4318",
+			},
+			wantEndpoint: "http://prometheus:4318",
+		},
+		{
+			name: "signal-specific works without base",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://prometheus:4318",
+			},
+			wantEndpoint: "http://prometheus:4318",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
+			}
+
+			cfg := NewConfig("", "", "")
+			got := cfg.MetricsEndpoint()
+
+			if got != tt.wantEndpoint {
+				t.Errorf("MetricsEndpoint() = %q, want %q", got, tt.wantEndpoint)
+			}
+		})
+	}
+}
+
+func TestMetricsEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVars map[string]string
+		want    bool
+	}{
+		{
+			name:    "disabled when no endpoint",
+			envVars: map[string]string{},
+			want:    false,
+		},
+		{
+			name: "enabled when base endpoint set",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+			},
+			want: true,
+		},
+		{
+			name: "enabled when metrics-specific endpoint set",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://prometheus:4318",
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
+			}
+
+			cfg := NewConfig("", "", "")
+			if got := cfg.MetricsEnabled(); got != tt.want {
+				t.Errorf("MetricsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnabled(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -179,6 +271,13 @@ func TestEnabled(t *testing.T) {
 			name: "enabled when only logs endpoint set",
 			envVars: map[string]string{
 				"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://loki:4318",
+			},
+			want: true,
+		},
+		{
+			name: "enabled when only metrics endpoint set",
+			envVars: map[string]string{
+				"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://prometheus:4318",
 			},
 			want: true,
 		},

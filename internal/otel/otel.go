@@ -10,7 +10,7 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
-// SetupOTelSDK initializes the OpenTelemetry SDK with tracing and logs support
+// SetupOTelSDK initializes the OpenTelemetry SDK with tracing, logs, and metrics support
 func SetupOTelSDK(ctx context.Context, gitSHA, dirty, version string, logger *slog.Logger) (shutdown func(context.Context) error, loggerProvider *sdklog.LoggerProvider, err error) {
 	var shutdownFuncs []func(context.Context) error
 
@@ -47,6 +47,16 @@ func SetupOTelSDK(ctx context.Context, gitSHA, dirty, version string, logger *sl
 		shutdownFuncs = append(shutdownFuncs, logsProvider.Shutdown)
 		loggerProvider = logsProvider.LoggerProvider()
 		logger.Info("OpenTelemetry logs enabled", "endpoint", config.LogsEndpoint())
+	}
+
+	if config.MetricsEnabled() {
+		metricsProvider, err := NewMetricsProvider(ctx, config)
+		if err != nil {
+			return shutdown, nil, err
+		}
+		shutdownFuncs = append(shutdownFuncs, metricsProvider.Shutdown)
+		otel.SetMeterProvider(metricsProvider.MeterProvider())
+		logger.Info("OpenTelemetry metrics enabled", "endpoint", config.MetricsEndpoint())
 	}
 
 	return shutdown, loggerProvider, nil
