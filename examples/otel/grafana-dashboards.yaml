@@ -1,0 +1,233 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-mcp
+  namespace: observability
+data:
+  mcp-gateway.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "title": "Total Tool Calls",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "steps": [
+                  { "color": "blue", "value": null }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum(mcp_tool_calls_total) or vector(0)",
+              "legendFormat": "tool calls"
+            }
+          ]
+        },
+        {
+          "title": "Total Tool List Requests",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "steps": [
+                  { "color": "blue", "value": null }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum(mcp_tool_list_total) or vector(0)",
+              "legendFormat": "tools/list"
+            }
+          ]
+        },
+        {
+          "title": "Avg Tool Route Duration",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(mcp_tool_route_duration_seconds_sum[5m])) / sum(rate(mcp_tool_route_duration_seconds_count[5m]))",
+              "legendFormat": "avg duration"
+            }
+          ]
+        },
+        {
+          "title": "Active Sessions",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 50 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "mcp_active_sessions or vector(0)",
+              "legendFormat": "sessions"
+            }
+          ]
+        },
+        {
+          "title": "Tool Calls per Server",
+          "type": "piechart",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "values": ["value"] },
+            "pieType": "donut",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "targets": [
+            {
+              "expr": "sum by (mcp_server_name) (mcp_tool_calls_total)",
+              "legendFormat": "{{mcp_server_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Tool Calls per Tool",
+          "type": "piechart",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "values": ["value"] },
+            "pieType": "donut",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "targets": [
+            {
+              "expr": "sum by (tool_name) (mcp_tool_calls_total)",
+              "legendFormat": "{{tool_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Healthy Servers",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "expr": "mcp_server_health",
+              "legendFormat": "{{server_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Tool Call Rate over Time",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (mcp_server_name) (rate(mcp_tool_calls_total[5m]))",
+              "legendFormat": "{{mcp_server_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Avg Tool Route Duration per Server",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (mcp_server_name) (rate(mcp_tool_route_duration_seconds_sum[5m])) / sum by (mcp_server_name) (rate(mcp_tool_route_duration_seconds_count[5m]))",
+              "legendFormat": "{{mcp_server_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Requests by Method",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 30, "spanNulls": true, "stacking": { "mode": "normal" } },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (method) (rate(mcp_requests_total[5m]))",
+              "legendFormat": "{{method}}"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 38,
+      "tags": ["mcp", "gateway"],
+      "templating": { "list": [] },
+      "time": { "from": "now-15m", "to": "now" },
+      "title": "MCP Gateway Metrics",
+      "uid": "mcp-gateway-metrics"
+    }

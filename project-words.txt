@@ -373,3 +373,4 @@ otlpmetricgrpc
 otlpmetrichttp
 sdkmetric
 prometheusremotewrite
+promql

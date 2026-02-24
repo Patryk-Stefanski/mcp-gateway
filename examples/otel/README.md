@@ -6,9 +6,10 @@ This directory contains Kubernetes manifests for deploying an OpenTelemetry obse
 
 | Component | Purpose | Port |
 |-----------|---------|------|
-| **OTEL Collector** | Receives traces and logs, routes to backends | 4317 (gRPC), 4318 (HTTP) |
+| **OTEL Collector** | Receives traces, logs, and metrics, routes to backends | 4317 (gRPC), 4318 (HTTP) |
 | **Tempo** | Trace storage and query | 3200 (HTTP), 4317 (OTLP) |
 | **Loki** | Log storage and query (with trace correlation) | 3100 |
+| **Prometheus** | Metrics storage and query | 9090 |
 | **Grafana** | Visualization and dashboards | 3000 |
 
 ## Setup Flow
@@ -313,3 +314,165 @@ echo "Search for trace: $TRACE_ID"
 3. Enter query: `{job="mcp-gateway"}`
 4. Expand a log line -- look for `trace_id` and `span_id` fields
 5. Click the `trace_id` value to jump directly to that trace in Tempo
+
+## Metrics
+
+### Custom Application Metrics
+
+The MCP Gateway exports custom metrics via OTLP to the OTEL Collector, which writes
+them to Prometheus via remote write. These are available when `OTEL_EXPORTER_OTLP_ENDPOINT`
+is set (automatic with `make otel`).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `mcp_tool_calls_total` | Counter | `tool_name`, `mcp_server_name` | Total tool call requests |
+| `mcp_tool_route_duration_seconds` | Histogram | `tool_name`, `mcp_server_name` | Router decision latency for tool calls |
+| `mcp_requests_total` | Counter | `method`, `component` | All MCP requests (broker + router) |
+| `mcp_active_sessions` | UpDownCounter | | Currently active client sessions |
+| `mcp_server_health` | UpDownCounter | `server_name` | Upstream server health transitions |
+| `mcp_tool_list_total` | Counter | | Total tools/list requests |
+
+### Istio/Envoy Metrics
+
+When `ISTIO_METRICS=1` is set, Prometheus scrapes standard Istio metrics from the
+gateway pod (port 15020):
+
+- `istio_requests_total` - request count with `response_code`, `destination_service`
+- `istio_request_duration_milliseconds` - request duration histogram
+
+Example PromQL queries:
+
+```promql
+# Tool calls per server
+sum by (mcp_server_name) (rate(mcp_tool_calls_total[5m]))
+
+# Request rate by method
+sum by (method) (rate(mcp_requests_total[5m]))
+
+# Istio request rate (requires ISTIO_METRICS=1)
+sum(rate(istio_requests_total[5m]))
+```
+
+### Testing Metrics Locally
+
+Step-by-step guide to verify metrics on a local Kind cluster.
+
+#### 1. Set up the local environment
+
+```bash
+make local-env-setup
+```
+
+Wait for all pods to be ready. This creates the Kind cluster, installs Istio,
+deploys the MCP Gateway, test servers, and example MCPServerRegistrations.
+
+#### 2. Deploy the observability stack with metrics
+
+```bash
+make otel ISTIO_METRICS=1
+```
+
+This deploys Prometheus, OTEL Collector (with metrics pipeline), Grafana, Tempo,
+and Loki. It also enables Istio metrics scraping and sets
+`OTEL_EXPORTER_OTLP_ENDPOINT` on the broker-router pod, which activates the
+MeterProvider and starts exporting custom metrics.
+
+#### 3. Verify pods are running
+
+```bash
+make otel-status
+```
+
+You should see `prometheus`, `otel-collector`, `grafana`, `tempo`, and `loki`
+pods in `Running` state.
+
+#### 4. Start port-forwards
+
+```bash
+make otel-forward
+```
+
+This opens:
+- Grafana: http://localhost:3000
+- Prometheus: http://localhost:9090
+
+#### 5. Generate traffic
+
+In a separate terminal, initialize a session and make some requests:
+
+```bash
+# Initialize (--max-time 5 prevents hanging on SSE stream)
+curl -s -D /tmp/mcp_headers --max-time 5 -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+
+SESSION_ID=$(grep -i "mcp-session-id:" /tmp/mcp_headers | cut -d' ' -f2 | tr -d '\r')
+echo "Session ID: $SESSION_ID"
+
+# List tools (generates mcp_tool_list_total + mcp_requests_total)
+curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# Call a tool (generates mcp_tool_calls_total + mcp_tool_route_duration_seconds)
+curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test2_hello_world","arguments":{"name":"World"}}}'
+
+# Call another tool on a different server
+curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"test1_time"}}'
+
+rm -f /tmp/mcp_headers
+```
+
+#### 6. Verify custom metrics in Prometheus
+
+Open http://localhost:9090 and query:
+
+- `mcp_tool_calls_total` -- should show entries with `tool_name` and `mcp_server_name` labels
+- `mcp_tool_route_duration_seconds_count` -- histogram count of tool calls
+- `mcp_requests_total` -- should show entries with `method` and `component` labels
+- `mcp_active_sessions` -- should show 1 (the SSE session from the initialize GET)
+- `mcp_server_health` -- should show healthy server count
+- `mcp_tool_list_total` -- should show the tools/list request count
+
+#### 7. Verify Istio metrics in Prometheus
+
+These are only available with `ISTIO_METRICS=1`:
+
+- `istio_requests_total` -- should show request counts with `response_code` labels
+- `istio_request_duration_milliseconds_bucket` -- request duration histogram
+
+#### 8. View metrics in Grafana
+
+A pre-provisioned **MCP Gateway Metrics** dashboard is available:
+
+1. Open http://localhost:3000
+2. Go to **Dashboards** (four squares icon)
+3. Click **MCP Gateway Metrics**
+
+The dashboard shows:
+- Tool call rate by tool name
+- Tool call duration percentiles (p50/p95/p99)
+- Request rate by MCP method and component
+- Active sessions and healthy server counts
+- Tool list request rate and total tool calls
+- Tool call rate by upstream MCP server
+
+You can also query ad-hoc in **Explore** (compass icon) with the Prometheus datasource.
+
+#### 9. Cleanup
+
+```bash
+make otel-delete          # Remove observability stack
+make local-env-teardown   # Delete Kind cluster
+```

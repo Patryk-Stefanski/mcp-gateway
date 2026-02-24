@@ -603,7 +603,7 @@ AUTH_TRACING ?= 0
 
 .PHONY: otel
 otel: ## Deploy OpenTelemetry observability stack. Use ISTIO_TRACING=1, ISTIO_METRICS=1, AUTH_TRACING=1.
-	kubectl apply -f examples/otel/namespace.yaml -f examples/otel/tempo.yaml -f examples/otel/loki.yaml -f examples/otel/prometheus.yaml -f examples/otel/otel-collector.yaml -f examples/otel/grafana.yaml
+	kubectl apply -f examples/otel/namespace.yaml -f examples/otel/tempo.yaml -f examples/otel/loki.yaml -f examples/otel/prometheus.yaml -f examples/otel/otel-collector.yaml -f examples/otel/grafana-dashboards.yaml -f examples/otel/grafana.yaml
 	@kubectl wait --for=condition=Available deployment -n observability --all --timeout=120s
 ifeq ($(ISTIO_TRACING),1)
 	kubectl apply -f examples/otel/istio-telemetry.yaml
@@ -644,7 +644,7 @@ otel-delete: ## Delete OpenTelemetry observability stack
 	-kubectl delete -f examples/otel/istio-telemetry.yaml --ignore-not-found
 	-kubectl patch istio default --type='merge' \
 		-p='{"spec":{"values":{"meshConfig":{"enableTracing":false,"defaultConfig":{"tracing":null},"extensionProviders":null,"defaultProviders":{"metrics":null}}}}}'
-	-kubectl delete -f examples/otel/grafana.yaml -f examples/otel/otel-collector.yaml -f examples/otel/prometheus.yaml -f examples/otel/loki.yaml -f examples/otel/tempo.yaml -f examples/otel/namespace.yaml --ignore-not-found
+	-kubectl delete -f examples/otel/grafana.yaml -f examples/otel/grafana-dashboards.yaml -f examples/otel/otel-collector.yaml -f examples/otel/prometheus.yaml -f examples/otel/loki.yaml -f examples/otel/tempo.yaml -f examples/otel/namespace.yaml --ignore-not-found
 
 .PHONY: otel-status
 otel-status: ## Show status of OpenTelemetry observability stack

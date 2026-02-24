@@ -15,8 +15,8 @@ func TestInit(t *testing.T) {
 	if ToolCallsTotal == nil {
 		t.Fatal("ToolCallsTotal should not be nil after Init")
 	}
-	if ToolCallDuration == nil {
-		t.Fatal("ToolCallDuration should not be nil after Init")
+	if ToolRouteDuration == nil {
+		t.Fatal("ToolRouteDuration should not be nil after Init")
 	}
 	if RequestsTotal == nil {
 		t.Fatal("RequestsTotal should not be nil after Init")
@@ -42,7 +42,7 @@ func TestCountersDoNotPanic(t *testing.T) {
 
 	// these should not panic even with noop meter
 	ToolCallsTotal.Add(ctx, 1, attrs)
-	ToolCallDuration.Record(ctx, 0.5, attrs)
+	ToolRouteDuration.Record(ctx, 0.5, attrs)
 	RequestsTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("method", "tools/call"),
 		attribute.String("component", "router"),

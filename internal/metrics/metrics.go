@@ -12,8 +12,8 @@ var (
 	// ToolCallsTotal counts tool call requests
 	ToolCallsTotal metric.Int64Counter
 
-	// ToolCallDuration records tool call latency in seconds
-	ToolCallDuration metric.Float64Histogram
+	// ToolRouteDuration records router decision latency for tool calls in seconds
+	ToolRouteDuration metric.Float64Histogram
 
 	// RequestsTotal counts all MCP requests by method and component
 	RequestsTotal metric.Int64Counter
@@ -38,8 +38,8 @@ func Init() {
 		metric.WithDescription("Total number of MCP tool call requests"),
 	)
 
-	ToolCallDuration, _ = meter.Float64Histogram("mcp.tool_call_duration_seconds",
-		metric.WithDescription("Duration of MCP tool calls in seconds"),
+	ToolRouteDuration, _ = meter.Float64Histogram("mcp.tool_route_duration_seconds",
+		metric.WithDescription("Duration of router decision for MCP tool calls in seconds"),
 	)
 
 	RequestsTotal, _ = meter.Int64Counter("mcp.requests_total",

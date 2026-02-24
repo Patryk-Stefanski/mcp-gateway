@@ -209,8 +209,8 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		if metrics.ToolCallsTotal != nil {
 			metrics.ToolCallsTotal.Add(ctx, 1, attrs)
 		}
-		if metrics.ToolCallDuration != nil {
-			metrics.ToolCallDuration.Record(ctx, time.Since(startTime).Seconds(), attrs)
+		if metrics.ToolRouteDuration != nil {
+			metrics.ToolRouteDuration.Record(ctx, time.Since(startTime).Seconds(), attrs)
 		}
 	}()
 
