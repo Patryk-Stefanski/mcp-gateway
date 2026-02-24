@@ -8,6 +8,9 @@ spec:
   - providers:
     - name: tempo-otlp
     randomSamplingPercentage: 100
+  metrics:
+  - providers:
+    - name: prometheus
 ---
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
