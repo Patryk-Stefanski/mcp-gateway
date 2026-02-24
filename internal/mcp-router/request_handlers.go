@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/Kuadrant/mcp-gateway/internal/config"
+	"github.com/Kuadrant/mcp-gateway/internal/metrics"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	eppb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -167,6 +169,15 @@ func (s *ExtProcServer) RouteMCPRequest(ctx context.Context, mcpReq *MCPRequest)
 	)
 	defer span.End()
 
+	if metrics.RequestsTotal != nil {
+		metrics.RequestsTotal.Add(ctx, 1,
+			metric.WithAttributes(
+				attribute.String("method", mcpReq.Method),
+				attribute.String("component", "router"),
+			),
+		)
+	}
+
 	s.Logger.DebugContext(ctx, "HandleMCPRequest ", "session id", mcpReq.GetSessionID())
 	switch mcpReq.Method {
 	case methodToolCall:
@@ -181,6 +192,7 @@ func (s *ExtProcServer) RouteMCPRequest(ctx context.Context, mcpReq *MCPRequest)
 // HandleToolCall will handle an MCP Tool Call
 func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) []*eppb.ProcessingResponse {
 	toolName := mcpReq.ToolName()
+	startTime := time.Now()
 
 	ctx, span := tracer().Start(ctx, "mcp-router.tool-call",
 		trace.WithAttributes(
@@ -188,7 +200,19 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 			attribute.String("mcp.session.id", mcpReq.GetSessionID()),
 		),
 	)
-	defer span.End()
+	defer func() {
+		span.End()
+		attrs := metric.WithAttributes(
+			attribute.String("tool_name", toolName),
+			attribute.String("mcp_server_name", mcpReq.serverName),
+		)
+		if metrics.ToolCallsTotal != nil {
+			metrics.ToolCallsTotal.Add(ctx, 1, attrs)
+		}
+		if metrics.ToolCallDuration != nil {
+			metrics.ToolCallDuration.Record(ctx, time.Since(startTime).Seconds(), attrs)
+		}
+	}()
 
 	calculatedResponse := NewResponse()
 	// handle tools call

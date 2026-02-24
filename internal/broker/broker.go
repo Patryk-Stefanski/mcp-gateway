@@ -12,8 +12,11 @@ import (
 
 	"github.com/Kuadrant/mcp-gateway/internal/broker/upstream"
 	"github.com/Kuadrant/mcp-gateway/internal/config"
+	"github.com/Kuadrant/mcp-gateway/internal/metrics"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var _ config.Observer = &mcpBrokerImpl{}
@@ -113,18 +116,32 @@ func NewBroker(logger *slog.Logger, opts ...func(*mcpBrokerImpl)) MCPBroker {
 	hooks := &server.Hooks{}
 
 	// Enhanced session registration to log gateway session assignment
-	hooks.AddOnRegisterSession(func(_ context.Context, session server.ClientSession) {
+	hooks.AddOnRegisterSession(func(ctx context.Context, session server.ClientSession) {
 		// Note that AddOnRegisterSession is for GET, not POST, for a session.
 		// https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#listening-for-messages-from-the-server
 		slog.Info("Broker: Gateway client session connected with session", "gatewaySessionID", session.SessionID())
+		if metrics.ActiveSessions != nil {
+			metrics.ActiveSessions.Add(ctx, 1)
+		}
 	})
 
-	hooks.AddOnUnregisterSession(func(_ context.Context, session server.ClientSession) {
+	hooks.AddOnUnregisterSession(func(ctx context.Context, session server.ClientSession) {
 		slog.Info("Broker: Gateway client session unregister ", "gatewaySessionID", session.SessionID())
+		if metrics.ActiveSessions != nil {
+			metrics.ActiveSessions.Add(ctx, -1)
+		}
 	})
 
-	hooks.AddBeforeAny(func(_ context.Context, _ any, method mcp.MCPMethod, _ any) {
+	hooks.AddBeforeAny(func(ctx context.Context, _ any, method mcp.MCPMethod, _ any) {
 		slog.Info("Processing request", "method", method)
+		if metrics.RequestsTotal != nil {
+			metrics.RequestsTotal.Add(ctx, 1,
+				metric.WithAttributes(
+					attribute.String("method", string(method)),
+					attribute.String("component", "broker"),
+				),
+			)
+		}
 	})
 
 	hooks.AddOnError(func(_ context.Context, _ any, method mcp.MCPMethod, _ any, err error) {
@@ -132,6 +149,9 @@ func NewBroker(logger *slog.Logger, opts ...func(*mcpBrokerImpl)) MCPBroker {
 	})
 
 	hooks.AddAfterListTools(func(ctx context.Context, id any, message *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
+		if metrics.ToolListTotal != nil {
+			metrics.ToolListTotal.Add(ctx, 1)
+		}
 		mcpBkr.FilterTools(ctx, id, message, result)
 	})
 

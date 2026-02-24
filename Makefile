@@ -598,6 +598,7 @@ OTEL_COLLECTOR_HOST ?= otel-collector.observability.svc.cluster.local
 OTEL_COLLECTOR_GRPC ?= rpc://$(OTEL_COLLECTOR_HOST):4317
 OTEL_COLLECTOR_HTTP ?= http://$(OTEL_COLLECTOR_HOST):4318
 ISTIO_TRACING ?= 0
+ISTIO_METRICS ?= 0
 AUTH_TRACING ?= 0
 
 .PHONY: otel
@@ -608,6 +609,11 @@ ifeq ($(ISTIO_TRACING),1)
 	kubectl apply -f examples/otel/istio-telemetry.yaml
 	kubectl patch istio default --type='merge' \
 		-p='{"spec":{"values":{"meshConfig":{"enableTracing":true,"defaultConfig":{"tracing":{}},"extensionProviders":[{"name":"tempo-otlp","opentelemetry":{"port":4317,"service":"$(OTEL_COLLECTOR_HOST)"}}]}}}}'
+	@sleep 5
+endif
+ifeq ($(ISTIO_METRICS),1)
+	kubectl patch istio default --type='merge' \
+		-p='{"spec":{"values":{"meshConfig":{"defaultProviders":{"metrics":["prometheus"]}}}}}'
 	@sleep 5
 endif
 	kubectl set env deployment/mcp-broker-router -n mcp-system \
@@ -637,7 +643,7 @@ endif
 otel-delete: ## Delete OpenTelemetry observability stack
 	-kubectl delete -f examples/otel/istio-telemetry.yaml --ignore-not-found
 	-kubectl patch istio default --type='merge' \
-		-p='{"spec":{"values":{"meshConfig":{"enableTracing":false,"defaultConfig":{"tracing":null},"extensionProviders":null}}}}'
+		-p='{"spec":{"values":{"meshConfig":{"enableTracing":false,"defaultConfig":{"tracing":null},"extensionProviders":null,"defaultProviders":{"metrics":null}}}}}'
 	-kubectl delete -f examples/otel/grafana.yaml -f examples/otel/otel-collector.yaml -f examples/otel/prometheus.yaml -f examples/otel/loki.yaml -f examples/otel/tempo.yaml -f examples/otel/namespace.yaml --ignore-not-found
 
 .PHONY: otel-status

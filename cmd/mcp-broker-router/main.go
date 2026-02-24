@@ -19,6 +19,7 @@ import (
 	"github.com/Kuadrant/mcp-gateway/internal/clients"
 	config "github.com/Kuadrant/mcp-gateway/internal/config"
 	mcpRouter "github.com/Kuadrant/mcp-gateway/internal/mcp-router"
+	"github.com/Kuadrant/mcp-gateway/internal/metrics"
 	mcpotel "github.com/Kuadrant/mcp-gateway/internal/otel"
 	"github.com/Kuadrant/mcp-gateway/internal/session"
 	goenv "github.com/caitlinelfring/go-env-default"
@@ -161,6 +162,8 @@ func main() {
 		logger = mcpotel.NewTracingLogger(os.Stdout, loggerOpts, jsonFormat, loggerProvider)
 		logger.Info("Logger upgraded with OTLP export")
 	}
+
+	metrics.Init()
 
 	sessionCache, err := session.NewCache(ctx)
 	if err != nil {

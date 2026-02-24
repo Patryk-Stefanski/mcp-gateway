@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/Kuadrant/mcp-gateway/internal/config"
+	"github.com/Kuadrant/mcp-gateway/internal/metrics"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // ToolsAdderDeleter defines the interface for interacting with the gateway directly
@@ -274,17 +277,26 @@ func (man *MCPManager) GetStatus() ServerValidationStatus {
 }
 
 func (man *MCPManager) setStatus(err error, toolCount int) {
+	wasReady := man.status.Ready
 	man.status.ID = string(man.MCP.ID())
 	man.status.LastValidated = time.Now()
 	man.status.Name = man.MCPName()
 	if err != nil {
 		man.status.Message = err.Error()
 		man.status.Ready = false
+		if wasReady && metrics.ServerHealth != nil {
+			metrics.ServerHealth.Add(context.Background(), -1,
+				metric.WithAttributes(attribute.String("server_name", man.MCPName())))
+		}
 		return
 	}
 	man.status.TotalTools = toolCount
 	man.status.Ready = true
 	man.status.Message = fmt.Sprintf("server added successfully. Total tools added %d", len(man.serverTools))
+	if !wasReady && metrics.ServerHealth != nil {
+		metrics.ServerHealth.Add(context.Background(), 1,
+			metric.WithAttributes(attribute.String("server_name", man.MCPName())))
+	}
 }
 
 func (man *MCPManager) findToolConflicts(mcpTools []server.ServerTool) error {
