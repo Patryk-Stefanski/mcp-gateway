@@ -600,10 +600,12 @@ OTEL_COLLECTOR_HTTP ?= http://$(OTEL_COLLECTOR_HOST):4318
 ISTIO_TRACING ?= 0
 ISTIO_METRICS ?= 0
 AUTH_TRACING ?= 0
+KIALI ?= 0
 
 .PHONY: otel
-otel: ## Deploy OpenTelemetry observability stack. Use ISTIO_TRACING=1, ISTIO_METRICS=1, AUTH_TRACING=1.
+otel: ## Deploy OpenTelemetry observability stack. Use ISTIO_TRACING=1, ISTIO_METRICS=1, AUTH_TRACING=1, KIALI=1.
 	kubectl apply -f examples/otel/namespace.yaml -f examples/otel/tempo.yaml -f examples/otel/loki.yaml -f examples/otel/prometheus.yaml -f examples/otel/otel-collector.yaml -f examples/otel/grafana-dashboards.yaml -f examples/otel/grafana.yaml
+	@kubectl rollout restart deployment/prometheus -n observability
 	@kubectl wait --for=condition=Available deployment -n observability --all --timeout=120s
 ifeq ($(ISTIO_TRACING),1)
 	kubectl apply -f examples/otel/istio-telemetry.yaml
@@ -617,7 +619,8 @@ ifeq ($(ISTIO_METRICS),1)
 	@sleep 5
 endif
 	kubectl set env deployment/mcp-broker-router -n mcp-system \
-		OTEL_EXPORTER_OTLP_ENDPOINT="$(OTEL_COLLECTOR_HTTP)" OTEL_EXPORTER_OTLP_INSECURE="true"
+		OTEL_EXPORTER_OTLP_ENDPOINT="$(OTEL_COLLECTOR_HTTP)" OTEL_EXPORTER_OTLP_INSECURE="true" \
+		OTEL_SERVICE_NAME="mcp-broker-router"
 	@kubectl rollout status deployment/mcp-broker-router -n mcp-system --timeout=120s
 ifeq ($(AUTH_TRACING),1)
 	@if ! kubectl get authorino -n kuadrant-system 2>/dev/null | grep -q authorino; then \
@@ -636,6 +639,9 @@ ifeq ($(AUTH_TRACING),1)
 	@sleep 30
 	@kubectl get envoyfilter -n gateway-system | grep -q tracing && echo "EnvoyFilter for tracing: OK" || echo "WARNING: tracing EnvoyFilter not found"
 	@kubectl get wasmplugin kuadrant-mcp-gateway -n gateway-system -o jsonpath='{.spec.pluginConfig.services.tracing-service}' 2>/dev/null | grep -q tracing && echo "WasmPlugin tracing-service: OK" || echo "WARNING: tracing-service not found"
+endif
+ifeq ($(KIALI),1)
+	"$(MAKE)" kiali-install
 endif
 	@echo "OTEL stack deployed. Run 'make otel-forward' for port-forwards."
 
@@ -656,6 +662,18 @@ otel-forward: ## Port-forward Grafana (3000), Prometheus (9090)
 	@echo "Prometheus: http://localhost:9090"
 	@kubectl port-forward -n observability svc/prometheus 9090:9090 &
 	@kubectl port-forward -n observability svc/grafana 3000:3000
+
+.PHONY: kiali-install
+kiali-install: ## Install Kiali with Prometheus, Grafana, and Tempo integration
+	@"$(MAKE)" -s -f build/kiali.mk kiali-install-impl
+
+.PHONY: kiali-uninstall
+kiali-uninstall: ## Uninstall Kiali operator and CR
+	@"$(MAKE)" -s -f build/kiali.mk kiali-uninstall-impl
+
+.PHONY: kiali-forward
+kiali-forward: ## Port-forward Kiali (20001)
+	@"$(MAKE)" -s -f build/kiali.mk kiali-forward-impl
 
 ##@ Testing
 

@@ -398,41 +398,7 @@ This opens:
 
 #### 5. Generate traffic
 
-In a separate terminal, initialize a session and make some requests:
-
-```bash
-# Initialize (--max-time 5 prevents hanging on SSE stream)
-curl -s -D /tmp/mcp_headers --max-time 5 -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
-
-SESSION_ID=$(grep -i "mcp-session-id:" /tmp/mcp_headers | cut -d' ' -f2 | tr -d '\r')
-echo "Session ID: $SESSION_ID"
-
-# List tools (generates mcp_tool_list_total + mcp_requests_total)
-curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-
-# Call a tool (generates mcp_tool_calls_total + mcp_tool_route_duration_seconds)
-curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test2_hello_world","arguments":{"name":"World"}}}'
-
-# Call another tool on a different server
-curl -s -X POST http://mcp.127-0-0-1.sslip.io:8001/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"test1_time"}}'
-
-rm -f /tmp/mcp_headers
-```
+Use the curl commands from the **Testing** section above to generate some MCP traffic
 
 #### 6. Verify custom metrics in Prometheus
 
@@ -475,4 +441,75 @@ You can also query ad-hoc in **Explore** (compass icon) with the Prometheus data
 ```bash
 make otel-delete          # Remove observability stack
 make local-env-teardown   # Delete Kind cluster
+```
+
+## Kiali
+
+[Kiali](https://kiali.io/) provides service mesh observability with support for
+Kubernetes Gateway API resources. In this gateway-only Istio setup (no sidecars,
+no mesh), Kiali offers a subset of its full capabilities.
+
+### What works in a gateway-only setup
+
+- **Gateway API visualization**: Kiali auto-discovers Gateway and HTTPRoute resources
+  via `gateway_api_classes: [{class_name: istio}]`
+- **Configuration validation**: Validates Istio and Gateway API resource configurations
+- **Traffic overview**: Request rates, error rates, and response codes at the gateway level
+- **Trace browsing**: Browse distributed traces via Tempo integration
+- **Grafana integration**: Deep links to Grafana dashboards
+
+### Limitations
+
+- **No service-to-service topology**: The traffic graph only shows the gateway plus
+  one hop to backend services. No internal service mesh visibility.
+- **No mTLS visualization**: No sidecars means no mutual TLS status indicators.
+- **Partial destination metrics**: Some `reporter="destination"` labels will show as
+  `"unknown"` since there are no sidecar proxies on backend pods.
+- **Overview page shows "No inbound traffic"**: The overview defaults to inbound
+  traffic direction. Without sidecars on backend pods, no destination-side metrics
+  exist. Switch "Health for" to **Outbound** to see gateway traffic.
+
+### Prerequisites
+
+The OTEL stack with Istio metrics must be running:
+
+```bash
+make otel ISTIO_METRICS=1
+```
+
+### Install
+
+```bash
+make kiali-install
+```
+
+Or deploy Kiali as part of the full OTEL stack:
+
+```bash
+make otel ISTIO_METRICS=1 KIALI=1
+```
+
+### Access
+
+```bash
+make kiali-forward
+```
+
+Open http://localhost:20001 in your browser.
+
+### What to look for
+
+- **Overview**: Switch "Health for" to **Outbound** to see gateway traffic. The
+  default inbound view will show "No inbound traffic" for all namespaces since
+  there are no sidecar proxies reporting destination-side metrics.
+- **Traffic Graph**: Select `gateway-system` + `mcp-test` namespaces and use
+  "Workload graph" type. Shows the gateway with outbound edges to backend services.
+  Generate traffic first if the graph is empty (`curl` examples above).
+- **Istio Config**: Lists Gateway and HTTPRoute resources with validation status
+- **Workloads**: Shows `mcp-gateway` workload detail with metrics from Prometheus
+
+### Uninstall
+
+```bash
+make kiali-uninstall
 ```
