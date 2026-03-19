@@ -4,6 +4,28 @@ KIALI_VERSION ?= 2.3
 KIALI_NAMESPACE = istio-system
 HELM ?= bin/helm
 
+KIALI_HELM_SETS = \
+	--set cr.create=true \
+	--set cr.namespace=$(KIALI_NAMESPACE) \
+	--set cr.spec.auth.strategy=anonymous \
+	--set cr.spec.deployment.cluster_wide_access=true \
+	--set cr.spec.external_services.prometheus.url=http://prometheus.observability:9090 \
+	--set cr.spec.external_services.grafana.enabled=true \
+	--set cr.spec.external_services.grafana.url=http://localhost:3000 \
+	--set cr.spec.external_services.grafana.in_cluster_url=http://grafana.observability:3000 \
+	--set cr.spec.external_services.tracing.enabled=true \
+	--set cr.spec.external_services.tracing.provider=tempo \
+	--set cr.spec.external_services.tracing.url=http://localhost:3000/explore \
+	--set cr.spec.external_services.tracing.in_cluster_url=http://tempo.observability:3200 \
+	--set cr.spec.external_services.tracing.use_grpc=false \
+	--set cr.spec.external_services.tracing.tempo_config.org_id=1 \
+	--set cr.spec.external_services.tracing.tempo_config.datasource_uid=tempo \
+	--set cr.spec.external_services.tracing.tempo_config.url_format=grafana \
+	--set cr.spec.external_services.tracing.namespace_selector=true \
+	--set "cr.spec.external_services.istio.gateway_api_classes[0].class_name=istio" \
+	--set "cr.spec.extensions[0].enabled=true" \
+	--set "cr.spec.extensions[0].name=mcp-gateway"
+
 .PHONY: kiali-install-impl
 kiali-install-impl: $(HELM)
 	@echo "Installing Kiali Operator via Helm..."
@@ -15,24 +37,7 @@ kiali-install-impl: $(HELM)
 			kiali-operator kiali/kiali-operator \
 			--namespace $(KIALI_NAMESPACE) \
 			--version $(KIALI_VERSION) \
-			--set cr.create=true \
-			--set cr.namespace=$(KIALI_NAMESPACE) \
-			--set cr.spec.auth.strategy=anonymous \
-			--set cr.spec.deployment.cluster_wide_access=true \
-			--set cr.spec.external_services.prometheus.url=http://prometheus.observability:9090 \
-			--set cr.spec.external_services.grafana.enabled=true \
-			--set cr.spec.external_services.grafana.url=http://localhost:3000 \
-			--set cr.spec.external_services.grafana.in_cluster_url=http://grafana.observability:3000 \
-			--set cr.spec.external_services.tracing.enabled=true \
-			--set cr.spec.external_services.tracing.provider=tempo \
-			--set cr.spec.external_services.tracing.url=http://localhost:3000/explore \
-			--set cr.spec.external_services.tracing.in_cluster_url=http://tempo.observability:3200 \
-			--set cr.spec.external_services.tracing.use_grpc=false \
-			--set cr.spec.external_services.tracing.tempo_config.org_id=1 \
-			--set cr.spec.external_services.tracing.tempo_config.datasource_uid=tempo \
-			--set cr.spec.external_services.tracing.tempo_config.url_format=grafana \
-			--set cr.spec.external_services.tracing.namespace_selector=true \
-			--set "cr.spec.external_services.istio.gateway_api_classes[0].class_name=istio" \
+			$(KIALI_HELM_SETS) \
 			--wait \
 			--timeout=300s; \
 	else \
@@ -41,24 +46,7 @@ kiali-install-impl: $(HELM)
 			--namespace $(KIALI_NAMESPACE) \
 			--create-namespace \
 			--version $(KIALI_VERSION) \
-			--set cr.create=true \
-			--set cr.namespace=$(KIALI_NAMESPACE) \
-			--set cr.spec.auth.strategy=anonymous \
-			--set cr.spec.deployment.cluster_wide_access=true \
-			--set cr.spec.external_services.prometheus.url=http://prometheus.observability:9090 \
-			--set cr.spec.external_services.grafana.enabled=true \
-			--set cr.spec.external_services.grafana.url=http://localhost:3000 \
-			--set cr.spec.external_services.grafana.in_cluster_url=http://grafana.observability:3000 \
-			--set cr.spec.external_services.tracing.enabled=true \
-			--set cr.spec.external_services.tracing.provider=tempo \
-			--set cr.spec.external_services.tracing.url=http://localhost:3000/explore \
-			--set cr.spec.external_services.tracing.in_cluster_url=http://tempo.observability:3200 \
-			--set cr.spec.external_services.tracing.use_grpc=false \
-			--set cr.spec.external_services.tracing.tempo_config.org_id=1 \
-			--set cr.spec.external_services.tracing.tempo_config.datasource_uid=tempo \
-			--set cr.spec.external_services.tracing.tempo_config.url_format=grafana \
-			--set cr.spec.external_services.tracing.namespace_selector=true \
-			--set "cr.spec.external_services.istio.gateway_api_classes[0].class_name=istio" \
+			$(KIALI_HELM_SETS) \
 			--wait \
 			--timeout=300s; \
 	fi

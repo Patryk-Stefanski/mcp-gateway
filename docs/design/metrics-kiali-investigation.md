@@ -38,6 +38,59 @@ Instruments use the global `otel.Meter("mcp-gateway")` and record via noop until
 
 Kiali has two URL fields for external services: `url` for browser redirects (must be reachable from the user's browser) and `in_cluster_url` for server-side API calls (must be reachable from inside the cluster). Setting both to the in-cluster URL causes broken browser links.
 
+### Kiali configuration reference
+
+All settings are in `build/kiali.mk` and applied via Helm `--set` values.
+
+**General:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `cr.create` | `true` | Helm creates the Kiali CR automatically |
+| `cr.namespace` | `istio-system` | Deploy Kiali in the Istio namespace |
+| `cr.spec.auth.strategy` | `anonymous` | No login required (dev environments only) |
+| `cr.spec.deployment.cluster_wide_access` | `true` | Kiali can see all namespaces |
+
+**Prometheus:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `external_services.prometheus.url` | `http://prometheus.observability:9090` | In-cluster URL for Kiali server-side Prometheus queries (Istio metrics, health calculations, graph construction) |
+
+**Grafana:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `external_services.grafana.enabled` | `true` | Enable Grafana integration |
+| `external_services.grafana.url` | `http://localhost:3000` | Browser-facing URL for Grafana links (must be port-forwarded) |
+| `external_services.grafana.in_cluster_url` | `http://grafana.observability:3000` | In-cluster URL for Kiali server-side Grafana API calls |
+
+**Tracing (Tempo):**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `external_services.tracing.enabled` | `true` | Enable distributed tracing integration |
+| `external_services.tracing.provider` | `tempo` | Use Grafana Tempo as the tracing backend |
+| `external_services.tracing.url` | `http://localhost:3000/explore` | Browser-facing URL for trace links (opens Grafana Explore, must be port-forwarded) |
+| `external_services.tracing.in_cluster_url` | `http://tempo.observability:3200` | In-cluster URL for Kiali server-side Tempo API queries |
+| `external_services.tracing.use_grpc` | `false` | Use HTTP API instead of gRPC for Tempo queries |
+| `external_services.tracing.tempo_config.org_id` | `1` | Tempo tenant ID (single-tenant setup) |
+| `external_services.tracing.tempo_config.datasource_uid` | `tempo` | Grafana Tempo datasource UID, used to construct correct Explore links |
+| `external_services.tracing.tempo_config.url_format` | `grafana` | Format trace links as Grafana Explore URLs |
+| `external_services.tracing.namespace_selector` | `true` | Scope trace queries to the selected namespace to reduce noise |
+
+**Istio:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `external_services.istio.gateway_api_classes[0].class_name` | `istio` | Discover Gateway API resources using the `istio` GatewayClass |
+
+**OTEL service name** (in `Makefile`, not kiali.mk):
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `OTEL_SERVICE_NAME` | `mcp-broker-router` | Set on the broker deployment via `kubectl set env`. Must match the Kubernetes deployment name so Kiali can correlate traces from Tempo with the workload in the Traces tab. Default was `mcp-gateway` which caused a mismatch. |
+
 ### Makefile targets
 
 The `make otel` target deploys the full stack and accepts feature flags:
@@ -57,10 +110,13 @@ MCP Gateway uses Istio only as a Gateway API provider -- no sidecars, no service
 ### What works
 
 **Traffic Graph** (most useful view):
-- Select `gateway-system` + `mcp-test` namespaces, set graph type to "Workload graph"
-- Shows the `mcp-gateway` workload with outbound edges to backend services
-- Edges display request rates and response codes from source-side (`reporter="source"`) metrics
-- Topology is one hop only: gateway to backends
+- Select `gateway-system` + `mcp-test` namespaces, set graph type to "App graph"
+- Istio metrics show client-to-gateway edges from the gateway proxy
+- Kiali extension metrics add gateway-to-upstream-MCP-server edges, showing per-server
+  request rates, error rates, and response times
+- Combined view shows the full request path from clients through the gateway to individual
+  upstream MCP servers
+- Note: use "App graph" not "Workload graph" (workload graph rejects extension service nodes)
 
 **Istio Config**:
 - Lists Gateway and HTTPRoute resources with validation badges
@@ -88,6 +144,121 @@ These are limitations of a gateway-only Istio deployment. No configuration chang
 - **No mTLS indicators**: no sidecar-to-sidecar connections means no mTLS status
 - **No service-to-service topology**: only one hop visible (gateway to backend), no deeper service mesh graph
 - **No workload health for backends**: only the gateway workload has metrics
+
+## Kiali extension framework investigation
+
+The Kiali extension framework (introduced in v2.0, KEP: kiali/kiali#7485) allows third-party traffic
+metrics to appear in Kiali's service mesh graph. Extensions emit standardised `kiali_ext_*` metrics
+with source/destination labels, and Kiali's extensions graph appender merges them into the traffic
+graph alongside standard Istio metrics.
+
+### What was implemented
+
+Two Kiali extension metrics were added to `internal/metrics/metrics.go`:
+
+| Metric | Type | Purpose |
+|--------|------|---------|
+| `kiali_ext_requests_total` | Counter | Request count per source/destination edge |
+| `kiali_ext_response_time_seconds` | Histogram | Latency with Kiali-specified buckets (.005-.01-.025-.05-.1-.25-.5-1-2.5-5-10) |
+
+Each metric carries 14 labels per the Kiali extension spec: `extension`, `source_cluster`,
+`source_namespace`, `source_name`, `source_is_root`, `reporter`, `reporter_id`, `dest_cluster`,
+`dest_namespace`, `dest_name`, `protocol`, `status_code`, `flags`, `secure`.
+
+The router's `HandleToolCall` records both metrics on every tool call with:
+- Source: the gateway workload (`source_is_root=true` so the appender reuses the existing Istio node)
+- Destination: the upstream MCP server, with namespace/name parsed from the `MCPServer.Name` field
+
+The extension was registered in the Kiali CR via Helm in `build/kiali.mk`:
+```yaml
+spec:
+  extensions:
+    - enabled: true
+      name: mcp-gateway
+```
+
+### Issues encountered
+
+**Issue 1: Cluster name mismatch prevents root node matching**
+
+The extension metrics initially used `source_cluster=local` as the default cluster identifier.
+Kiali/Istio defaults to `Kubernetes` as the cluster name. The extensions appender's `findRootNode`
+function matches on cluster + namespace + name to find the existing gateway workload node. With
+mismatched cluster names, the lookup failed and the appender created a new service-type node
+instead of reusing the existing workload node.
+
+Fix: changed default cluster to `Kubernetes` (overridable via `KIALI_CLUSTER` env var).
+
+**Issue 2: Source name mismatch prevents root node matching**
+
+The extension metrics used `source_name=mcp-gateway` but the Istio gateway deployment is named
+`mcp-gateway-istio` (Istio's naming convention: `<gateway-name>-istio`). The `findRootNode`
+function checks `n.Workload == name || n.Service == name || n.App == name`, so the name must
+match one of these fields on the existing Istio workload node.
+
+Fix: changed default source name to `mcp-gateway-istio` (overridable via `KIALI_EXT_SOURCE_NAME`).
+
+**Issue 3: Extensions appender creates service-type nodes that break workload graphs**
+
+The extensions appender in `graph/telemetry/istio/appender/extensions.go` calls:
+```go
+graph.Id(cluster, namespace, name, "", "", "", "", graphType)
+```
+
+This passes `name` into the `service` parameter with empty workload/app/version. The `Id()`
+function returns `NodeTypeService` for workload graphs when workload is empty. The workload
+graph renderer then fails with:
+
+```
+Cannot load the graph: Expected nodeType [workload] for node
+[&{ID:svc_Kubernetes_mcp-test_test-server2 NodeType:service ...}]
+```
+
+This affects **destination nodes** (upstream MCP servers). The source node is handled correctly
+via `findRootNode` (after fixes 1 and 2), but destination nodes have no existing workload in the
+Istio graph to match against. The appender always creates them as service-type nodes.
+
+This is a bug in the Kiali extensions appender -- it should either pass `name` as the workload
+parameter or the graph renderer should tolerate service-type nodes from extensions. The Kiali
+documentation states "Kiali will always show a terminal service node when the request itself
+fails to be routed to a destination workload", but the workload graph validation rejects
+extension-created service nodes.
+
+**Issue 4: App graph frontend rendering crash (resolved)**
+
+The app graph crashed with:
+```
+Cannot convert undefined or null to object
+```
+
+The Kiali frontend's `getEdgeHealth` calls `transformEdgeResponses` which calls `Object.values()`
+on a `flags` field in the edge traffic response. Istio edges include `flags: {"-": "100.0"}` but
+extension edges were missing the `flags` field entirely because the extension metrics had
+`Flags: ""` (empty string). The Kiali extensions appender only populates the `flags` map when the
+label value is non-empty.
+
+Istio uses `"-"` as the flags label value to mean "no flags". Changing the extension metrics to
+use `Flags: "-"` causes the appender to produce the expected `flags: {"-": "100.0"}` structure,
+which fixes the frontend crash.
+
+Fix: changed `Flags` from `""` to `"-"` in both `NewKialiGatewayToUpstream` and
+`NewKialiBrokerInbound`.
+
+### Current status
+
+The Kiali extension framework is working for the app graph type. The extension metrics produce
+edges in the Kiali traffic graph showing gateway-to-upstream-MCP-server traffic with request
+rates, error rates, and response times.
+
+**Working (app graph)**:
+- Extension edges render correctly alongside Istio edges
+- Source node (gateway) is matched to the existing Istio workload node via `findRootNode`
+- Destination nodes (upstream MCP servers) appear as service-type nodes
+- Edge health indicators (traffic coloring) work correctly
+
+**Not working (workload graph)**:
+- Issue 3 remains: the extensions appender creates service-type destination nodes that the
+  workload graph renderer rejects. Use the app graph type instead.
 
 ## Possible improvements
 

@@ -200,8 +200,10 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 			attribute.String("mcp.session.id", mcpReq.GetSessionID()),
 		),
 	)
+	var routeStatusCode = "200"
 	defer func() {
 		span.End()
+		elapsed := time.Since(startTime).Seconds()
 		attrs := metric.WithAttributes(
 			attribute.String("tool_name", toolName),
 			attribute.String("mcp_server_name", mcpReq.serverName),
@@ -210,7 +212,15 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 			metrics.ToolCallsTotal.Add(ctx, 1, attrs)
 		}
 		if metrics.ToolRouteDuration != nil {
-			metrics.ToolRouteDuration.Record(ctx, time.Since(startTime).Seconds(), attrs)
+			metrics.ToolRouteDuration.Record(ctx, elapsed, attrs)
+		}
+		// kiali extension metrics for gateway→upstream edge
+		if mcpReq.serverName != "" && metrics.KialiExtRequestsTotal != nil {
+			kialiAttrs := metrics.NewKialiGatewayToUpstream(mcpReq.serverName, routeStatusCode)
+			metrics.KialiExtRequestsTotal.Add(ctx, 1, kialiAttrs.Attributes())
+			if metrics.KialiExtResponseTime != nil {
+				metrics.KialiExtResponseTime.Record(ctx, elapsed, kialiAttrs.Attributes())
+			}
 		}
 	}()
 
@@ -220,6 +230,7 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		s.Logger.ErrorContext(ctx, "[EXT-PROC] HandleRequestBody no tool name set in tools/call")
 		span.SetStatus(codes.Error, "no tool name set")
 		span.SetAttributes(attribute.String("error.type", "missing_tool_name"))
+		routeStatusCode = "400"
 		calculatedResponse.WithImmediateResponse(400, "no tool name set")
 		return calculatedResponse.Build()
 	}
@@ -227,6 +238,7 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		s.Logger.InfoContext(ctx, "No mcp-session-id found in headers")
 		span.SetStatus(codes.Error, "no session ID found")
 		span.SetAttributes(attribute.String("error.type", "missing_session"))
+		routeStatusCode = "400"
 		calculatedResponse.WithImmediateResponse(400, "no session ID found")
 		return calculatedResponse.Build()
 	}
@@ -237,6 +249,7 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "session validation failed")
 		span.SetAttributes(attribute.String("error.type", "session_validation_error"))
+		routeStatusCode = "404"
 		calculatedResponse.WithImmediateResponse(404, "session no longer valid")
 		return calculatedResponse.Build()
 	}
@@ -244,6 +257,7 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		s.Logger.DebugContext(ctx, "invalid session ", "session", mcpReq.GetSessionID())
 		span.SetStatus(codes.Error, "invalid session")
 		span.SetAttributes(attribute.String("error.type", "invalid_session"))
+		routeStatusCode = "404"
 		calculatedResponse.WithImmediateResponse(404, "session no longer valid")
 		return calculatedResponse.Build()
 	}
@@ -271,6 +285,7 @@ func (s *ExtProcServer) HandleToolCall(ctx context.Context, mcpReq *MCPRequest) 
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "tool not found")
 		span.SetAttributes(attribute.String("error.type", "tool_not_found"))
+		routeStatusCode = "404"
 		calculatedResponse.WithImmediateJSONRPCResponse(200,
 			[]*corev3.HeaderValueOption{
 				{
@@ -341,6 +356,7 @@ data: {"result":{"content":[{"type":"text","text":"MCP error -32602: Tool not fo
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "session cache error")
 		span.SetAttributes(attribute.String("error.type", "session_cache_error"))
+		routeStatusCode = "500"
 		calculatedResponse.WithImmediateResponse(500, "internal error")
 		return calculatedResponse.Build()
 	}
@@ -354,8 +370,10 @@ data: {"result":{"content":[{"type":"text","text":"MCP error -32602: Tool not fo
 		if err != nil {
 			var routerErr *RouterError
 			if errors.As(err, &routerErr) {
+				routeStatusCode = fmt.Sprintf("%d", routerErr.Code())
 				calculatedResponse.WithImmediateResponse(routerErr.Code(), routerErr.Error())
 			} else {
+				routeStatusCode = "500"
 				calculatedResponse.WithImmediateResponse(500, "internal error")
 			}
 			s.Logger.ErrorContext(ctx, "failed to get remote mcp server session id ", "error ", err)
@@ -376,6 +394,7 @@ data: {"result":{"content":[{"type":"text","text":"MCP error -32602: Tool not fo
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "body marshal failed")
 		span.SetAttributes(attribute.String("error.type", "marshal_error"))
+		routeStatusCode = "500"
 		calculatedResponse.WithImmediateResponse(500, "internal error")
 		return calculatedResponse.Build()
 	}
@@ -385,6 +404,7 @@ data: {"result":{"content":[{"type":"text","text":"MCP error -32602: Tool not fo
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "path parse failed")
 		span.SetAttributes(attribute.String("error.type", "path_parse_error"))
+		routeStatusCode = "500"
 		calculatedResponse.WithImmediateResponse(500, "internal error")
 		return calculatedResponse.Build()
 	}

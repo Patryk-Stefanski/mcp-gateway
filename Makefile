@@ -295,7 +295,6 @@ docker-build: ## Build container image locally
 
 # Common reload steps
 define reload-image
-	@docker tag mcp-gateway:local ghcr.io/kuadrant/mcp-gateway:latest
 	@$(call load-image,ghcr.io/kuadrant/mcp-gateway:latest)
 endef
 
