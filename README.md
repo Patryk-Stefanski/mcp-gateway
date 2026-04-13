@@ -18,7 +18,7 @@ If you already have a Kubernetes cluster with [Gateway API](https://gateway-api.
 
 ```bash
 # Install Gateway API CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 # Install MCP Gateway (quotes required for zsh)
 kubectl apply -k 'https://github.com/Kuadrant/mcp-gateway/config/install?ref=main'
 ```
@@ -133,7 +133,7 @@ In controller mode:
 ## Configuration
 
 ### Standalone Configuration
-Edit `config/mcp-system/config.yaml`:
+Edit `config/samples/config.yaml`:
 
 ```yaml
 servers:
