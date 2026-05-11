@@ -61,6 +61,7 @@ func NewRouterErrorf(code int32, format string, args ...any) *RouterError {
 
 const (
 	methodToolCall    = "tools/call"
+	methodPromptGet   = "prompts/get"
 	methodInitialize  = "initialize"
 	methodInitialized = "notification/initialized"
 
@@ -189,6 +190,32 @@ func (mr *MCPRequest) ReWriteToolName(actualTool string) {
 	mr.Params["name"] = actualTool
 }
 
+// isPromptGet will check if the request is a prompts/get request
+func (mr *MCPRequest) isPromptGet() bool {
+	return mr.Method == methodPromptGet
+}
+
+// PromptName returns the prompt name in a prompts/get request
+func (mr *MCPRequest) PromptName() string {
+	if !mr.isPromptGet() {
+		return ""
+	}
+	prompt, ok := mr.Params["name"]
+	if !ok {
+		return ""
+	}
+	p, ok := prompt.(string)
+	if !ok {
+		return ""
+	}
+	return p
+}
+
+// ReWritePromptName will allow re-setting the prompt name to remove prefix
+func (mr *MCPRequest) ReWritePromptName(actualPrompt string) {
+	mr.Params["name"] = actualPrompt
+}
+
 // ToBytes marshals the data ready to send on
 func (mr *MCPRequest) ToBytes() ([]byte, error) {
 	return json.Marshal(mr)
@@ -220,6 +247,9 @@ func (s *ExtProcServer) RouteMCPRequest(ctx context.Context, mcpReq *MCPRequest)
 	case mcpReq.Method == methodToolCall:
 		span.SetAttributes(attribute.String("mcp.route", "tool-call"))
 		return s.HandleToolCall(ctx, mcpReq)
+	case mcpReq.Method == methodPromptGet:
+		span.SetAttributes(attribute.String("mcp.route", "prompt-get"))
+		return s.HandlePromptGet(ctx, mcpReq)
 	default:
 		span.SetAttributes(attribute.String("mcp.route", "broker"))
 		return s.HandleNoneToolCall(ctx, mcpReq)
@@ -417,6 +447,161 @@ data: {"result":{"content":[{"type":"text","text":"MCP error -32602: Tool not fo
 	headers.WithContentLength(len(body))
 	if mcpReq.Streaming {
 		s.Logger.DebugContext(ctx, "returning streaming response")
+		calculatedResponse.WithStreamingResponse(headers.Build(), body)
+		return calculatedResponse.Build()
+	}
+	calculatedResponse.WithRequestBodyHeadersAndBodyReponse(headers.Build(), body)
+	return calculatedResponse.Build()
+}
+
+// HandlePromptGet handles an MCP prompts/get request by routing to the correct upstream server
+func (s *ExtProcServer) HandlePromptGet(ctx context.Context, mcpReq *MCPRequest) []*eppb.ProcessingResponse {
+	promptName := mcpReq.PromptName()
+
+	ctx, span := tracer().Start(ctx, "mcp-router.prompt-get",
+		trace.WithAttributes(
+			attribute.String("mcp.prompt.name", promptName),
+			attribute.String("mcp.session.id", mcpReq.GetSessionID()),
+		),
+	)
+	defer span.End()
+
+	calculatedResponse := NewResponse()
+	if promptName == "" {
+		s.Logger.ErrorContext(ctx, "[EXT-PROC] HandlePromptGet no prompt name set in prompts/get")
+		span.SetStatus(codes.Error, "no prompt name set")
+		span.SetAttributes(attribute.String("error.type", "missing_prompt_name"))
+		calculatedResponse.WithImmediateResponse(400, "no prompt name set")
+		return calculatedResponse.Build()
+	}
+	if sessionErr := s.validateSession(mcpReq.GetSessionID()); sessionErr != nil {
+		s.Logger.ErrorContext(ctx, "session validation failed", "session", mcpReq.GetSessionID(), "error", sessionErr)
+		span.RecordError(sessionErr)
+		span.SetStatus(codes.Error, sessionErr.Error())
+		span.SetAttributes(attribute.String("error.type", "invalid_session"))
+		calculatedResponse.WithImmediateResponse(sessionErr.Code(), sessionErr.Error())
+		return calculatedResponse.Build()
+	}
+
+	headers := NewHeaders()
+	var serverInfo *config.MCPServer
+	var err error
+	{
+		_, infoSpan := tracer().Start(ctx, "mcp-router.broker.get-server-info-by-prompt",
+			trace.WithAttributes(
+				attribute.String("mcp.prompt.name", promptName),
+			),
+		)
+		var infoErr error
+		serverInfo, infoErr = s.Broker.GetServerInfoByPrompt(promptName)
+		if infoErr != nil {
+			infoSpan.RecordError(infoErr)
+			infoSpan.SetStatus(codes.Error, "prompt not found")
+		}
+		infoSpan.End()
+		err = infoErr
+	}
+	if err != nil {
+		s.Logger.DebugContext(ctx, "no server for prompt", "promptName", promptName)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "prompt not found")
+		span.SetAttributes(attribute.String("error.type", "prompt_not_found"))
+		calculatedResponse.WithImmediateJSONRPCResponse(200,
+			[]*corev3.HeaderValueOption{
+				{
+					Header: &corev3.HeaderValue{
+						Key:   "mcp-session-id",
+						Value: mcpReq.GetSessionID(),
+					},
+				},
+			},
+			`
+event: message
+data: {"error":{"code":-32602,"message":"Prompt not found"},"jsonrpc":"2.0"}`)
+		return calculatedResponse.Build()
+	}
+
+	span.SetAttributes(
+		attribute.String("mcp.server", serverInfo.Name),
+		attribute.String("mcp.server.hostname", serverInfo.Hostname),
+	)
+
+	headers.WithMCPMethod(mcpReq.Method)
+	mcpReq.serverName = serverInfo.Name
+	upstreamPromptName, _ := strings.CutPrefix(promptName, serverInfo.Prefix)
+	headers.WithMCPPromptName(upstreamPromptName)
+	mcpReq.ReWritePromptName(upstreamPromptName)
+	headers.WithMCPServerName(serverInfo.Name)
+
+	var exists map[string]string
+	{
+		_, cacheSpan := tracer().Start(ctx, "mcp-router.session-cache.get",
+			trace.WithAttributes(
+				attribute.String("mcp.session.id", mcpReq.GetSessionID()),
+			),
+		)
+		var cacheErr error
+		exists, cacheErr = s.SessionCache.GetSession(ctx, mcpReq.GetSessionID())
+		if cacheErr != nil {
+			cacheSpan.RecordError(cacheErr)
+			cacheSpan.SetStatus(codes.Error, "session cache get failed")
+		}
+		cacheSpan.End()
+		err = cacheErr
+	}
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "failed to get session from cache", "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "session cache error")
+		span.SetAttributes(attribute.String("error.type", "session_cache_error"))
+		calculatedResponse.WithImmediateResponse(500, "internal error")
+		return calculatedResponse.Build()
+	}
+	var remoteMCPSeverSession string
+	if id, ok := exists[mcpReq.serverName]; ok {
+		remoteMCPSeverSession = id
+	}
+	if remoteMCPSeverSession == "" {
+		id, err := s.initializeMCPSeverSession(ctx, mcpReq)
+		if err != nil {
+			var routerErr *RouterError
+			if errors.As(err, &routerErr) {
+				calculatedResponse.WithImmediateResponse(routerErr.Code(), routerErr.Error())
+			} else {
+				calculatedResponse.WithImmediateResponse(500, "internal error")
+			}
+			s.Logger.ErrorContext(ctx, "failed to get remote mcp server session id", "error", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "session initialization failed")
+			span.SetAttributes(attribute.String("error.type", "session_init_error"))
+			return calculatedResponse.Build()
+		}
+		remoteMCPSeverSession = id
+	}
+
+	headers.WithMCPSession(remoteMCPSeverSession)
+	headers.WithAuthority(serverInfo.Hostname)
+	body, err := mcpReq.ToBytes()
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "failed to marshal body to bytes", "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "body marshal failed")
+		span.SetAttributes(attribute.String("error.type", "marshal_error"))
+		calculatedResponse.WithImmediateResponse(500, "internal error")
+		return calculatedResponse.Build()
+	}
+	path, err := serverInfo.Path()
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "failed to parse url for backend", "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "path parse failed")
+		span.SetAttributes(attribute.String("error.type", "path_parse_error"))
+		calculatedResponse.WithImmediateResponse(500, "internal error")
+		return calculatedResponse.Build()
+	}
+	headers.WithPath(path)
+	headers.WithContentLength(len(body))
+	if mcpReq.Streaming {
 		calculatedResponse.WithStreamingResponse(headers.Build(), body)
 		return calculatedResponse.Build()
 	}
