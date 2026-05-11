@@ -284,3 +284,7 @@ Authorino then packages this into the `allowed-capabilities` claim of the `x-mcp
 - [Issue #787 — Add support for MCP Prompts federation](https://github.com/Kuadrant/mcp-gateway/issues/787)
 - [Issue #208 — Investigate support for Resources and Prompts](https://github.com/Kuadrant/mcp-gateway/issues/208)
 - [Notifications design doc](notifications.md)
+
+## Change Log
+
+- **2026-05-06**: Implementation complete. Used `gatewayServer.ListPrompts()` for conflict detection (available since mcp-go v0.50.0) instead of the aggregation workaround originally described.
